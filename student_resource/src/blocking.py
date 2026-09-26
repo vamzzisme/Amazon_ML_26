@@ -9,14 +9,19 @@ import jellyfish
 def _build_inverted_index(texts, min_token_len=2, max_posting=8000):
     """Build inverted index: token → list of doc indices. Cap posting lists."""
     inv = defaultdict(list)
+    too_frequent = set()
     for idx, text in enumerate(texts):
         if not text:
             continue
         for t in set(text.split()):
-            if len(t) >= min_token_len:
-                inv[t].append(idx)
-    # Prune: remove tokens with too many or too few postings
-    inv = {t: idxs for t, idxs in inv.items() if 2 <= len(idxs) <= max_posting}
+            if len(t) < min_token_len or t in too_frequent:
+                continue
+            inv[t].append(idx)
+            if len(inv[t]) > max_posting:
+                del inv[t]
+                too_frequent.add(t)
+    # Prune: remove tokens with too few postings
+    inv = {t: idxs for t, idxs in inv.items() if len(idxs) >= 2}
     return inv
 
 
@@ -57,7 +62,7 @@ def token_blocking(s1_names, s23_names, top_k=20):
         else:
             top_pos = np.arange(len(counts))
         
-        candidates[s1_idx] = list(zip(unique_ids[top_pos].tolist(), counts[top_pos].tolist()))
+        candidates[s1_idx] = unique_ids[top_pos].tolist()
         
         if s1_idx % 50000 == 0 and s1_idx > 0:
             print(f"    {s1_idx}/{len(s1_names)}, elapsed {time.time()-t0:.1f}s")
@@ -75,13 +80,22 @@ def combined_name_addr_blocking(s1_names, s1_addrs, s23_names, s23_addrs, top_k=
     
     # Build combined index
     inv = defaultdict(list)
+    too_frequent = set()
     for idx in range(len(s23_names)):
-        combined = (s23_names[idx] or '') + ' ' + (s23_addrs[idx] or '')
-        for t in set(combined.split()):
-            if len(t) >= 2:
-                inv[t].append(idx)
+        n1 = s23_names[idx]
+        n2 = s23_addrs[idx]
+        tokens = set()
+        if n1: tokens.update(n1.split())
+        if n2: tokens.update(n2.split())
+        for t in tokens:
+            if len(t) < 2 or t in too_frequent:
+                continue
+            inv[t].append(idx)
+            if len(inv[t]) > 5000:
+                del inv[t]
+                too_frequent.add(t)
     
-    inv = {t: idxs for t, idxs in inv.items() if 2 <= len(idxs) <= 5000}
+    inv = {t: idxs for t, idxs in inv.items() if len(idxs) >= 2}
     print(f"  Combined inv index: {len(inv)} tokens, built in {time.time()-t0:.1f}s")
     
     candidates = {}
@@ -106,7 +120,7 @@ def combined_name_addr_blocking(s1_names, s1_addrs, s23_names, s23_addrs, top_k=
         else:
             top_pos = np.arange(len(counts))
         
-        candidates[s1_idx] = list(zip(unique_ids[top_pos].tolist(), counts[top_pos].tolist()))
+        candidates[s1_idx] = unique_ids[top_pos].tolist()
         
         if s1_idx % 50000 == 0 and s1_idx > 0:
             print(f"    {s1_idx}/{len(s1_names)}, elapsed {time.time()-t0:.1f}s")
@@ -143,7 +157,7 @@ def address_key_block(s1_addrs, s23_addrs):
     for idx, addr in enumerate(s1_addrs):
         key = extract_key(addr)
         if key and key in s23_index:
-            candidates[idx] = [(s23_idx, 1) for s23_idx in s23_index[key]]
+            candidates[idx] = s23_index[key]
     
     print(f"  Address key blocking done in {time.time()-t0:.1f}s, keys: {len(s23_index)}")
     return candidates
@@ -170,7 +184,7 @@ def prefix_blocking(s1_names, s23_names, prefix_len=4, top_k=20):
         if len(first_word) >= prefix_len:
             key = first_word[:prefix_len]
             if key in inv:
-                candidates[s1_idx] = [(idx, 1) for idx in inv[key][:top_k]]
+                candidates[s1_idx] = inv[key][:top_k]
     
     print(f"  Prefix blocking done in {time.time()-t0:.1f}s, keys: {len(inv)}")
     return candidates
@@ -199,7 +213,7 @@ def phonetic_blocking(s1_names, s23_names, top_k=20):
         if len(first_word) >= 3:
             code = jellyfish.metaphone(first_word)
             if code and code in inv:
-                candidates[s1_idx] = [(idx, 1) for idx in inv[code][:top_k]]
+                candidates[s1_idx] = inv[code][:top_k]
     
     print(f"  Phonetic blocking done in {time.time()-t0:.1f}s, keys: {len(inv)}")
     return candidates
@@ -240,23 +254,44 @@ def run_blocking(s1_df, s23_df, top_k=20):
         
         print(f"  {len(s1_names)} S1 x {len(s23_names)} S23")
         
+        local_merged = defaultdict(set)
+        
+        import gc
+        
         # Pass A: name token blocking
-        cands_name = token_blocking(s1_names, s23_names, top_k=top_k)
+        cands = token_blocking(s1_names, s23_names, top_k=top_k)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
         
         # Pass B: combined name+address blocking  
-        cands_combined = combined_name_addr_blocking(s1_names, s1_addrs, s23_names, s23_addrs, top_k=top_k)
+        cands = combined_name_addr_blocking(s1_names, s1_addrs, s23_names, s23_addrs, top_k=top_k)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
         
         # Pass C: address key blocking
-        cands_addr = address_key_block(s1_addrs, s23_addrs)
+        cands = address_key_block(s1_addrs, s23_addrs)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
         
         # Pass D: prefix blocking
-        cands_prefix = prefix_blocking(s1_names, s23_names, prefix_len=4, top_k=top_k)
+        cands = prefix_blocking(s1_names, s23_names, prefix_len=4, top_k=top_k)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
         
         # Pass E: phonetic blocking
-        cands_phonetic = phonetic_blocking(s1_names, s23_names, top_k=top_k)
-        
-        # Merge and map to global indices
-        local_merged = merge_candidates(cands_name, cands_combined, cands_addr, cands_prefix, cands_phonetic)
+        cands = phonetic_blocking(s1_names, s23_names, top_k=top_k)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
         
         for local_s1, local_s23_set in local_merged.items():
             global_s1 = s1_local_to_global[local_s1]
