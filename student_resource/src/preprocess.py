@@ -61,6 +61,16 @@ _DOMAIN_RE = re.compile(r'\.(com|net|org|co\.in|in|io|biz|us|fr)$', re.I)
 _PUNCT = re.compile(r'[^\w\s]', re.UNICODE)
 _MULTI_SPACE = re.compile(r'\s+')
 
+def repair_leet(text):
+    """Repair common leet-speak typos in words (e.g. Preparat0ry -> Preparatory)."""
+    # Only replace if surrounded by letters to avoid ruining actual numbers/addresses
+    text = re.sub(r'([a-z])0([a-z])', r'\1o\2', text)
+    text = re.sub(r'([a-z])3([a-z])', r'\1e\2', text)
+    text = re.sub(r'([a-z])1([a-z])', r'\1i\2', text)
+    text = re.sub(r'([a-z])4([a-z])', r'\1a\2', text)
+    text = re.sub(r'([a-z])5([a-z])', r'\1s\2', text)
+    return text
+
 
 def normalize_text(text):
     """Core normalization: transliterate → lowercase → strip junk → clean."""
@@ -70,6 +80,8 @@ def normalize_text(text):
     text = unidecode(text)
     # Lowercase
     text = text.lower().strip()
+    # Repair leet-speak typos before punctuation removal
+    text = repair_leet(text)
     # Strip junk prefixes
     text = _JUNK_PREFIX.sub('', text)
     # Replace & with 'and'

@@ -13,7 +13,8 @@ def _build_inverted_index(texts, min_token_len=2, max_posting=8000):
     for idx, text in enumerate(texts):
         if not text:
             continue
-        for t in set(text.split()):
+        tokens = set(text.split()) if isinstance(text, str) else set(text)
+        for t in tokens:
             if len(t) < min_token_len or t in too_frequent:
                 continue
             inv[t].append(idx)
@@ -219,6 +220,52 @@ def phonetic_blocking(s1_names, s23_names, top_k=20):
     return candidates
 
 
+def ngram_blocking(s1_names, s23_names, top_k=20):
+    """Block by character 3-grams (spaces removed) to catch typos and partial overlap."""
+    t0 = time.time()
+    
+    def get_3grams(text):
+        if not text: return []
+        t = text.replace(' ', '')
+        if len(t) < 3: return [t]
+        return [t[i:i+3] for i in range(len(t)-2)]
+        
+    s23_ngrams = [get_3grams(name) for name in s23_names]
+    # Use max_posting 5000 to drop very common 3-grams (e.g. 'inc', 'ltd')
+    inv = _build_inverted_index(s23_ngrams, min_token_len=2, max_posting=5000)
+    print(f"  N-gram inv index: {len(inv)} 3-grams, built in {time.time()-t0:.1f}s")
+    
+    candidates = {}
+    for s1_idx, name in enumerate(s1_names):
+        if not name:
+            continue
+        
+        ngrams = set(get_3grams(name))
+        all_hits = []
+        for t in ngrams:
+            if t in inv:
+                all_hits.extend(inv[t])
+        
+        if not all_hits:
+            continue
+            
+        hit_arr = np.array(all_hits, dtype=np.int32)
+        unique_ids, counts = np.unique(hit_arr, return_counts=True)
+        
+        if len(counts) > top_k:
+            top_pos = np.argpartition(counts, -top_k)[-top_k:]
+        else:
+            top_pos = np.arange(len(counts))
+            
+        candidates[s1_idx] = unique_ids[top_pos].tolist()
+        
+        if s1_idx % 50000 == 0 and s1_idx > 0:
+            print(f"    {s1_idx}/{len(s1_names)}, elapsed {time.time()-t0:.1f}s")
+            
+    print(f"  N-gram blocking done in {time.time()-t0:.1f}s")
+    return candidates
+
+
 def merge_candidates(*candidate_dicts):
     """Union of multiple blocking strategies."""
     merged = {}
@@ -288,6 +335,13 @@ def run_blocking(s1_df, s23_df, top_k=20):
         
         # Pass E: phonetic blocking
         cands = phonetic_blocking(s1_names, s23_names, top_k=top_k)
+        for k, v in cands.items():
+            local_merged[k].update(v)
+        del cands
+        gc.collect()
+        
+        # Pass F: ngram blocking (The SOTA fuzzy matcher)
+        cands = ngram_blocking(s1_names, s23_names, top_k=top_k)
         for k, v in cands.items():
             local_merged[k].update(v)
         del cands
