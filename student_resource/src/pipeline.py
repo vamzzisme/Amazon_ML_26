@@ -62,12 +62,30 @@ def build_training_pairs(candidates, s1_df, s23_df, truth_dict, max_neg_ratio=5)
         s1_eid = s1_ids[s1_idx]
         true_matches = truth_dict.get(s1_eid, set())
         
-        # Add all candidates as pairs
+        import random
+        pos_list = []
+        neg_list = []
+        
+        # Separate positives and negatives
         for s23_idx in s23_idx_set:
             s23_eid = s23_ids[s23_idx]
-            is_match = 1 if s23_eid in true_matches else 0
+            if s23_eid in true_matches:
+                pos_list.append(s23_idx)
+            else:
+                neg_list.append(s23_idx)
+                
+        # Subsample negatives to respect max_neg_ratio
+        if max_neg_ratio is not None:
+            max_n = max(len(pos_list) * max_neg_ratio, 5)
+            if len(neg_list) > max_n:
+                neg_list = random.sample(neg_list, max_n)
+                
+        for s23_idx in pos_list:
             pairs.append((s1_idx, s23_idx))
-            labels.append(is_match)
+            labels.append(1)
+        for s23_idx in neg_list:
+            pairs.append((s1_idx, s23_idx))
+            labels.append(0)
         
         # Also add ground truth positives that blocking may have missed
         for true_eid in true_matches:
