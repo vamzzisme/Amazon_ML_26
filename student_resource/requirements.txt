@@ -1,0 +1,11 @@
+pandas
+numpy
+scikit-learn
+lightgbm
+xgboost
+catboost
+rapidfuzz
+jellyfish
+unidecode
+sentence-transformers
+faiss-cpu
