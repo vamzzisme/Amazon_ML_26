@@ -113,9 +113,7 @@ def decode_predictions(pairs, probs, s1_ids, s23_ids, n_s1_total,
         results[s1_eid] = matched_eids
     
     # Ensure all S1 entities are present (singletons get empty list)
-    for i in range(n_s1_total):
-        s1_eid = s1_ids[i]
-        if s1_eid not in results:
-            results[s1_eid] = []
+    # NOTE: Moved this logic to pipeline.py because doing it here 
+    # inside a chunk overwrites other chunks with empty lists!
     
     return results

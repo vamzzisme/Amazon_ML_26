@@ -320,6 +320,11 @@ def run_pipeline(mode='dev', sample_limit=None, top_k=20):
         
         results = all_results
         
+        # Ensure all S1 entities from the test set are present in the final output
+        for s1_eid in s1_test['entity_id'].values:
+            if s1_eid not in results:
+                results[s1_eid] = []
+        
         # Write outputs
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         write_output(results, os.path.join(OUTPUT_DIR, 'matching_results.tsv'))
